@@ -266,6 +266,164 @@ class TestModelEffects(model.Model):
         return self.childs[name]
 
 
+class AnyError(Exception):
+    pass
+
+
+class DummyKeyErrorAction(action.Action):
+    action.effect(call.model_call("raise_key_error"))
+
+
+class DummyAnyErrorAction(action.Action):
+    action.effect(call.model_call("raise_any_error"))
+
+
+class DummyInitKeyErrorModel(model.Model):
+    model.identity("keyerror.model")
+
+    def init(self):
+        raise KeyError()
+
+
+class DummyInitAnyErrorModel(model.Model):
+    model.identity("anyerror.model")
+
+    def init(self):
+        raise AnyError()
+
+
+class TestAttrErrorModel(model.Model):
+    model.identity("attr.error.model")
+    model.attribute("key_error", value.Integer(),
+                    call.model_call("raise_key_error"),
+                    call.model_call("raise_key_error"))
+    model.attribute("any_error", value.Integer(),
+                    call.model_call("raise_any_error"),
+                    call.model_call("raise_any_error"))
+
+    def raise_key_error(self):
+        raise KeyError()
+
+    def raise_any_error(self):
+        raise AnyError()
+
+
+class TestChildErrorModel(model.Model):
+    model.identity("child.error.model")
+    model.child("key_error",
+                source=call.model_call("raise_key_error"))
+    model.child("any_error",
+                source=call.model_call("raise_any_error"))
+
+    def raise_key_error(self):
+        raise KeyError()
+
+    def raise_any_error(self):
+        raise AnyError()
+
+
+class TestViewErrorModel(model.Model):
+    model.identity("view.error.model")
+    model.child("key_error",
+                view=call.model_call("raise_key_error"))
+    model.child("any_error",
+                view=call.model_call("raise_any_error"))
+
+    def raise_key_error(self):
+        raise KeyError()
+
+    def raise_any_error(self):
+        raise AnyError()
+
+
+class TestInitErrorModel(model.Model):
+    model.identity("init.error.model")
+    model.child("key_error", model=DummyInitKeyErrorModel)
+    model.child("any_error", model=DummyInitAnyErrorModel)
+
+    def raise_key_error(self):
+        raise KeyError()
+
+    def raise_any_error(self):
+        raise AnyError()
+
+
+class TestActionErrorModel(model.Model):
+    model.identity("action.error.model")
+    model.action("key_error", DummyKeyErrorAction)
+    model.action("any_error", DummyAnyErrorAction)
+
+    def raise_key_error(self):
+        raise KeyError()
+
+    def raise_any_error(self):
+        raise AnyError()
+
+
+class EmptyModel(model.Model):
+    model.identity("empty.model")
+
+
+class TestKeyErrorSourceCollection(model.Collection):
+    model.identity("source.collection.keyerror.model")
+    model.child_model(EmptyModel)
+    model.child_names(call.model_call("get_names"))
+    model.child_source(getter.model_get("get_child"))
+
+    def get_names(self):
+        return ["a", "b", "c"]
+
+    def get_child(self, name):
+        if name in ["a", "c"]:
+            return name
+        raise KeyError()
+
+
+class TestAnyErrorSourceCollection(model.Collection):
+    model.identity("source.collection.anyerror.model")
+    model.child_model(EmptyModel)
+    model.child_names(call.model_call("get_names"))
+    model.child_source(getter.model_get("get_child"))
+
+    def get_names(self):
+        return ["a", "b", "c"]
+
+    def get_child(self, name):
+        if name in ["a", "c"]:
+            return name
+        raise AnyError()
+
+
+class TestKeyErrorViewCollection(model.Collection):
+    model.identity("view.collection.keyerror.model")
+    model.child_model(EmptyModel)
+    model.child_names(call.model_call("get_names"))
+    model.child_view(getter.model_get("get_view"))
+
+    def get_names(self):
+        return ["a", "b", "c"]
+
+    def get_view(self, name):
+        if name in ["a", "c"]:
+            return name
+        raise KeyError()
+
+
+class TestAnyErrorViewCollection(model.Collection):
+    model.identity("view.collection.anyerror.model")
+    model.child_model(EmptyModel)
+    model.child_names(call.model_call("get_names"))
+    model.child_view(getter.model_get("get_view"))
+
+    def get_names(self):
+        return ["a", "b", "c"]
+
+    def get_view(self, name):
+        if name in ["a", "c"]:
+            return name
+        raise AnyError()
+
+
 class TestModelsModel(common.TestCase):
 
     def setUp(self):
@@ -275,6 +433,139 @@ class TestModelsModel(common.TestCase):
     def tearDown(self):
         model.restore_factories(self._factories_snapshot)
         return common.TestCase.tearDown(self)
+
+    @defer.inlineCallbacks
+    def testModelErrors(self):
+        ### errors in attribute effects ###
+        mdl = yield TestAttrErrorModel.create(object())
+        yield self.asyncEqual(2, mdl.count_items())
+        items = yield mdl.fetch_items()
+        self.assertEqual(len(items), 2)
+        flag = yield mdl.provides_item("key_error")
+        self.assertTrue(flag)
+        flag = yield mdl.provides_item("any_error")
+        self.assertTrue(flag)
+
+        item = yield mdl.fetch_item("key_error")
+        sub = yield item.fetch()
+        yield self.asyncEqual(2, sub.count_actions())
+        actions = yield sub.fetch_actions()
+        self.assertEqual(len(actions), 2)
+        action = yield sub.fetch_action("get")
+        yield self.asyncErrback(KeyError, action.perform)
+        action = yield sub.fetch_action("set")
+        yield self.asyncErrback(KeyError, action.perform, 42)
+
+        item = yield mdl.fetch_item("any_error")
+        sub = yield item.fetch()
+        yield self.asyncEqual(2, sub.count_actions())
+        actions = yield sub.fetch_actions()
+        self.assertEqual(len(actions), 2)
+        action = yield sub.fetch_action("get")
+        yield self.asyncErrback(AnyError, action.perform)
+        action = yield sub.fetch_action("set")
+        yield self.asyncErrback(AnyError, action.perform, 42)
+
+        ### errors in child source getter effects ###
+        mdl = yield TestChildErrorModel.create(object())
+        yield self.asyncEqual(2, mdl.count_items())
+        items = yield mdl.fetch_items()
+        self.assertEqual(len(items), 2)
+        flag = yield mdl.provides_item("key_error")
+        self.assertTrue(flag)
+        flag = yield mdl.provides_item("any_error")
+        self.assertTrue(flag)
+
+        item = yield mdl.fetch_item("key_error")
+        # raising KeyError in an effect mean "not found"
+        yield self.asyncEqual(None, item.fetch())
+
+        item = yield mdl.fetch_item("any_error")
+        yield self.asyncErrback(AnyError, item.fetch)
+
+        ### errors in child view getter effects ###
+        mdl = yield TestViewErrorModel.create(object())
+        yield self.asyncEqual(2, mdl.count_items())
+        items = yield mdl.fetch_items()
+        self.assertEqual(len(items), 2)
+
+        item = yield mdl.fetch_item("key_error")
+        # raising KeyError in an effect mean "not found"
+        yield self.asyncEqual(None, item.fetch())
+
+        item = yield mdl.fetch_item("any_error")
+        yield self.asyncErrback(AnyError, item.fetch)
+
+        ### errors in model init methods ###
+        mdl = yield TestInitErrorModel.create(object())
+        yield self.asyncEqual(2, mdl.count_items())
+        items = yield mdl.fetch_items()
+        self.assertEqual(len(items), 2)
+        flag = yield mdl.provides_item("key_error")
+        self.assertTrue(flag)
+        flag = yield mdl.provides_item("any_error")
+        self.assertTrue(flag)
+
+        item = yield mdl.fetch_item("key_error")
+        # No special handling of KeyError for model initialization
+        yield self.asyncErrback(KeyError, item.fetch)
+
+        item = yield mdl.fetch_item("any_error")
+        yield self.asyncErrback(AnyError, item.fetch)
+
+        ### errors in model action effects ###
+        mdl = yield TestActionErrorModel.create(object())
+        yield self.asyncEqual(2, mdl.count_actions())
+        actions = yield mdl.fetch_actions()
+        self.assertEqual(len(actions), 2)
+        flag = yield mdl.provides_action("key_error")
+        self.assertTrue(flag)
+        flag = yield mdl.provides_action("any_error")
+        self.assertTrue(flag)
+
+        action = yield mdl.fetch_action("key_error")
+        # No special handling of KeyError for action effects
+        yield self.asyncErrback(KeyError, action.perform)
+
+        action = yield mdl.fetch_action("any_error")
+        yield self.asyncErrback(AnyError, action.perform)
+
+        ### key errors in source collection ###
+        mdl = yield TestKeyErrorSourceCollection.create(object())
+        yield self.asyncEqual(2, mdl.count_items())
+        items = yield mdl.fetch_items()
+        self.assertEqual(len(items), 2)
+        flag = yield mdl.provides_item("a")
+        self.assertTrue(flag)
+        flag = yield mdl.provides_item("b")
+        self.assertFalse(flag)
+        flag = yield mdl.provides_item("c")
+        self.assertTrue(flag)
+
+        item = yield mdl.fetch_item("a")
+        sub = yield item.fetch()
+        self.assertTrue(sub is not None and sub.source == "a")
+
+        item = yield mdl.fetch_item("b")
+        # KeyError mean "not found"
+        self.assertTrue(item is None)
+
+        ### any errors in source collection ###
+        mdl = yield TestAnyErrorSourceCollection.create(object())
+        yield self.asyncErrback(AnyError, mdl.count_items)
+        yield self.asyncErrback(AnyError, mdl.fetch_items)
+        flag = yield mdl.provides_item("a")
+        self.assertTrue(flag)
+        yield self.asyncErrback(AnyError, mdl.provides_item, "b")
+        flag = yield mdl.provides_item("c")
+        self.assertTrue(flag)
+
+        item = yield mdl.fetch_item("a")
+        sub = yield item.fetch()
+        self.assertTrue(sub is not None and sub.source == "a")
+
+#        item = yield mdl.fetch_item("b")
+#        yield self.asyncErrback(AnyError, item.fetch)
 
     @defer.inlineCallbacks
     def testModelEffects(self):

@@ -597,79 +597,68 @@ class StaticChildrenMixin(object):
     ### IModel ###
 
     def provides_item(self, name):
-
-        def check_initiated(model_item):
-            # a model item is provided if its initiate method
-            # returns a none None value
-            return model_item is not None
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error checking if %s "
-                                 "model %s is providing %s",
-                                 self.identity, self.name, name)
-            return None
-
-        item = self._model_items.get(name)
-        if item is not None:
-            d = item(self).initiate()
-            d.addCallbacks(check_initiated, log_error)
-            return d
-
-        return defer.succeed(False)
+        d = self._do_fetch_item(name, "Error fetching %s model %s item %s",
+                                self.identity, self.name, name)
+        return d.addCallback(lambda i: i is not None)
 
     def count_items(self):
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error counting %s model "
+        d = self._do_fetch_items("Error counting %s model "
                                  "%s items", self.identity, self.name)
-            return None
-
-        def count_items(items):
-            # Only count the model items whose initiate method
-            # returns a non None value
-            return len(filter(None, items))
-
-        items = [i(self).initiate().addErrback(log_error)
-                 for i in self._model_items.itervalues()]
-        d = defer.join(*items) # Errors are ignored
-        d.addCallback(count_items)
-        return d
+        return d.addCallback(len)
 
     def fetch_item(self, name):
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error fetching %s model "
-                                 "%s item %s", self.identity, self.name, name)
-            return None
-
-        item = self._model_items.get(name)
-        if item is not None:
-            return item(self).initiate().addErrback(log_error)
-
-        return defer.succeed(None)
+        return self._do_fetch_item(name, "Error fetching %s model %s item %s",
+                                   self.identity, self.name, name)
 
     def fetch_items(self):
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error fetching %s model "
-                                 "%s items", self.identity, self.name)
-            return None
-
-        def cleanup(items):
-            # Only return model items whose initiate method
-            # returns a non None value
-            return filter(None, items)
-
-        items = [item(self).initiate().addErrback(log_error)
-                 for item in self._model_items.itervalues()]
-        d = defer.join(*items)
-        d.addCallback(cleanup)
-        return d
+        return self._do_fetch_items("Error fetching %s model "
+                                    "%s items", self.identity, self.name)
 
     def query_items(self, **kwargs):
         return defer.fail(NotSupported("%s model %s do not support "
                                        "item queries" % (self.identity,
                                                          self.name)))
+
+    ### private ###
+
+    def _do_fetch_items(self, error_tmpl, *error_args):
+
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return None
+            error.handle_failure(None, failure, error_tmpl, *error_args)
+            return failure
+
+        def extract_items(param):
+            # Only return model items whose initiate method
+            # returns a non None value
+            return [i for s, i in param if s and i is not None]
+
+        def extract_first_failure(failure):
+            failure.trap(defer.FirstError)
+            return failure.subFailure
+
+        items = [item(self).initiate().addErrback(filter_error)
+                 for item in self._model_items.itervalues()]
+        d = defer.DeferredList(items,
+                               fireOnOneErrback=True,
+                               consumeErrors=True)
+        d.addCallbacks(extract_items, extract_first_failure)
+        return d
+
+    def _do_fetch_item(self, name, error_tmpl, *error_args):
+
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return None
+            error.handle_failure(None, failure, error_tmpl, *error_args)
+            return failure
+
+        item = self._model_items.get(name)
+        if item is not None:
+            return item(self).initiate().addErrback(filter_error)
+
+        return defer.succeed(None)
 
     ### annotations ###
 
@@ -738,50 +727,34 @@ class StaticActionsMixin(object):
     ### IModel ###
 
     def provides_action(self, name):
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error checking if %s model "
-                                 "%s provides action %s",
-                                 self.identity, self.name, name)
-            return None
-
-        def check_initiated(action_item):
-            # an action is provided only if the action item
-            # initiate method returns a non None value
-            return action_item is not None
-
-        item = self._action_items.get(name)
-        if item is not None:
-            d = item(self).initiate().addErrback(log_error)
-            d.addCallbacks(check_initiated)
-            return d
-
-        return defer.succeed(False)
+        d = self._do_fetch_action(name, "Error checking if %s model "
+                                  "%s provides action %s", self.identity,
+                                  self.name, name)
+        return d.addCallback(lambda a: a is not None)
 
     def count_actions(self):
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error counting %s model "
-                                 "%s actions", self.identity, self.name)
-            return None
-
-        def count_items(items):
-            # Only count the action items whose initiate method
-            # returns a non None value
-            return len(filter(None, items))
-
-        items = [i(self).initiate().addErrback(log_error)
-                 for i in self._action_items.itervalues()]
-        d = defer.join(*items) # Errors are ignored
-        d.addCallback(count_items)
-        return d
+        d = self._do_fetch_actions("Error counting %s model %s "
+                                   "actions", self.identity, self.name)
+        return d.addCallback(len)
 
     def fetch_action(self, name):
+        return self._do_fetch_action(name, "Error fetching %s model %s "
+                                     "action %s", self.identity,
+                                     self.name, name)
 
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error fetching %s model %s "
-                                 "action %s", self.identity, self.name, name)
-            return None
+    def fetch_actions(self):
+        return self._do_fetch_actions("Error fetching %s model %s "
+                                      "actions", self.identity, self.name)
+
+    ### private ###
+
+    def _do_fetch_action(self, name, error_tmpl, *error_args):
+
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return None
+            error.handle_failure(None, failure, error_tmpl, *error_args)
+            return failure
 
         def action_initiated(action_item):
             # Only fetch action whose item initiate method returns
@@ -792,35 +765,46 @@ class StaticActionsMixin(object):
 
         item = self._action_items.get(name)
         if item is not None:
-            d = item(self).initiate().addErrback(log_error)
+            d = item(self).initiate().addErrback(filter_error)
             d.addCallback(action_initiated)
             return d
 
         return defer.succeed(None)
 
-    def fetch_actions(self):
+    def _do_fetch_actions(self, error_tmpl, *error_args):
 
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error fetching %s model %s "
-                                 "actions", self.identity, self.name)
-            return None
+        def init_action(factory):
+            d = factory(self).initiate()
+            d.addCallbacks(action_initiated, filter_error)
+            return d
 
-        def item_initiated(action_item):
+        def action_initiated(action_item):
             # Only fetch action of items whose initiate method
             # returns a non None value
             if action_item is not None:
                 return action_item.fetch()
             return None
 
-        def cleanup(actions):
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return None
+            error.handle_failure(None, failure, error_tmpl, *error_args)
+            return failure
+
+        def extract_actions(param):
             # Cleanup actions whose action item's initiate method
             # did not returns a non None value
-            return filter(None, actions)
+            return [a for s, a in param if s and a is not None]
 
-        actions = [i(self).initiate().addCallbacks(item_initiated, log_error)
-                   for i in self._action_items.itervalues()]
-        d = defer.join(*actions)
-        d.addCallback(cleanup)
+        def extract_first_failure(failure):
+            failure.trap(defer.FirstError)
+            return failure.value.subFailure
+
+        actions = [init_action(f) for f in self._action_items.itervalues()]
+        d = defer.DeferredList(actions,
+                               fireOnOneErrback=True,
+                               consumeErrors=True)
+        d.addCallbacks(extract_actions, extract_first_failure)
         return d
 
     ### annotations ###
@@ -894,10 +878,16 @@ class BaseModelItem(models_meta.Metadata):
 
     ### protected ###
 
+    def _filter_key_errors(self, failure):
+        failure.trap(KeyError)
+        raise IgnoredError()
+
     def _filter_errors(self, failure):
+        if failure.check(IgnoredError):
+            return None
         error.handle_failure(None, failure,
                              "Failure creating model for '%s'", self.name)
-        return None
+        return failure
 
     def _create_model(self, view_getter=None, source_getters=None,
                       model_factory=None):
@@ -910,6 +900,7 @@ class BaseModelItem(models_meta.Metadata):
             # views are inherited
             d = defer.succeed(self.model.view)
 
+        d.addErrback(self._filter_key_errors)
         d.addCallback(self._retrieve_model, source_getters, model_factory)
 
         d.addErrback(self._filter_errors)
@@ -932,6 +923,7 @@ class BaseModelItem(models_meta.Metadata):
         context = self.model.make_context(key=self.name, view=view)
         for getter in source_getters:
             d.addCallback(self._retrieve_source, getter, context)
+        d.addErrback(self._filter_key_errors)
         d.addCallback(self._wrap_source, view, model_factory)
         return d
 
@@ -1154,88 +1146,26 @@ class DynamicItemsMixin(object):
     ### IModel ###
 
     def provides_item(self, name):
-        if self._fetch_source is None:
-            return self._notsup("checking item availability")
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error checking if %s model "
-                                 "%s item %s is provided",
-                                 self.identity, self.name, name)
-            return None
-
-        def cleanup(item):
-            return item is not None
-
-        item = DynamicModelItem(self, name)
-        d = item.initiate().addErrback(log_error)
-        d.addCallback(cleanup)
-        return d
+        d = self._do_fetch_item(name, "checking item availability",
+                                "Error checking if %s model "
+                                "%s item %s is provided",
+                                self.identity, self.name, name)
+        return d.addCallback(lambda i: i is not None)
 
     def count_items(self):
-        if self._fetch_names is None:
-            return self._notsup("items counting")
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error counting %s model %s "
-                                 "items", self.identity, self.name)
-            return None
-
-        def create_items(names):
-            Item = DynamicModelItem
-            items = [Item(self, n).initiate().addErrback(log_error)
-                     for n in names]
-            return defer.join(*items)
-
-        def cleanup(items):
-            # Only counting the item whose initiate method
-            # returns a non None value
-            return len(filter(None, items))
-
-        context = self.make_context(key=self.name)
-        d = self._fetch_names(None, context)
-        d.addCallback(create_items)
-        d.addCallback(cleanup)
-        return d
+        d = self._do_fetch_items("counting items",
+                                 "Error counting %s model %s items",
+                                 self.identity, self.name)
+        return d.addCallback(len)
 
     def fetch_item(self, name):
-        if (self._fetch_source is None
-            and self._fetch_view is None):
-            return self._notsup("fetching item")
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error fetching %s model %s "
-                                 "item %s", self.identity, self.name, name)
-            return None
-
-        item = DynamicModelItem(self, name)
-        return item.initiate().addErrback(log_error)
+        return self._do_fetch_item(name, "fetching item",
+                                   "Error fetching %s model %s item %s",
+                                   self.identity, self.name, name)
 
     def fetch_items(self):
-        if self._fetch_names is None:
-            return self._notsup("fetching items")
-
-        def log_error(failure):
-            error.handle_failure(None, failure, "Error fetching %s model %s "
-                                 "items", self.identity, self.name)
-            return None
-
-        def create_items(names):
-            if not names:
-                return []
-            Item = DynamicModelItem
-            items = [Item(self, n).initiate().addErrback(log_error)
-                     for n in names]
-            return defer.join(*items)
-
-        def cleanup(items):
-            # Only returns the item whose initiate method
-            # returns a non None value
-            return filter(None, items)
-
-        context = self.make_context()
-        d = self._fetch_names(None, context)
-        d.addCallback(create_items)
-        d.addCallback(cleanup)
+        d = self._do_fetch_items("fetching items", "Error fetching %s "
+                                 "model %s items", self.identity, self.name)
         return d
 
     def query_items(self, **kwargs):
@@ -1247,6 +1177,74 @@ class DynamicItemsMixin(object):
         msg = ("%s model %s does not support %s"
                % (self.identity, self.name, feature_desc, ))
         return defer.fail(NotSupported(msg))
+
+    def _do_fetch_item_names(self, context):
+        if self._fetch_names is None:
+            return self._notsup("fetching items")
+
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return [] # nothing
+            error.handle_failure(None, failure, "Error fetching %s model %s "
+                                 "item names", self.identity, self.name)
+            return failure
+
+        d = defer.succeed(None)
+        d.addCallback(self._fetch_names, context)
+        return d.addErrback(filter_error)
+
+    def _do_fetch_item(self, name, opname, error_tmpl, *error_args):
+        if (self._fetch_source is None
+            and self._fetch_view is None):
+            return self._notsup(opname)
+
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return None
+            error.handle_failure(None, failure, error_tmpl, *error_args)
+            return failure
+
+        item = DynamicModelItem(self, name)
+        return item.initiate().addErrback(filter_error)
+
+    def _do_fetch_items(self, opname, error_tmpl, *error_args):
+        if (self._fetch_names is None
+            or (self._fetch_source is None
+                and self._fetch_view is None)):
+            return self._notsup(opname)
+
+        def filter_error(failure):
+            if failure.check(KeyError):
+                return None
+            error.handle_failure(None, failure, error_tmpl, *error_args)
+            return failure
+
+        def extract_items(param):
+            # Only returns the item whose initiate method
+            # returns a non None value
+            return [v for s, v in param if s and v is not None]
+
+        def extract_first_error(failure):
+            failure.trap(defer.FirstError)
+            return failure.value.subFailure
+
+        def create_items(names):
+            if not names:
+                return []
+            Item = DynamicModelItem
+            items = [Item(self, n).initiate().addErrback(filter_error)
+                     for n in names]
+            d = defer.DeferredList(items,
+                                   fireOnOneErrback=True,
+                                   consumeErrors=True)
+            d.addCallbacks(extract_items, extract_first_error)
+            return d
+
+        context = self.make_context()
+        d = defer.succeed(context)
+        d.addCallback(self._do_fetch_item_names)
+        d.addCallback(create_items)
+        return d
 
     ### annotations ###
 
@@ -1410,6 +1408,10 @@ class DynamicModelItem(BaseModelItem):
 
 
 _model_factories = {}
+
+
+class IgnoredError(Exception):
+    pass
 
 
 def _validate_flag(value):

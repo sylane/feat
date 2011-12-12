@@ -505,6 +505,8 @@ class Recipient(model.Model):
     ### custom ###
 
     def _get_reference(self):
+        print "FFFFFFFFFFFFUUUUUUUUUUUUUUUU"
+        raise ValueError("FUUUUUUUUUUU")
         return reference.Local("agents", self.source.key)
 
 
